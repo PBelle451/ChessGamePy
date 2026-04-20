@@ -1,579 +1,675 @@
-import pygame
-import sys
-import copy
+"""
+Xadrez com IA — Minimax + Alpha-Beta Pruning
+Pecas renderizadas com fonte FreeSerif (suporte unicode completo)
+"""
+
+import pygame, sys, copy, threading
 
 pygame.init()
 
-# ── Constantes de tela ──────────────────────────────────────────
-BOARD_SIZE  = 640
-PANEL_WIDTH = 240
-WIDTH       = BOARD_SIZE + PANEL_WIDTH
-HEIGHT      = BOARD_SIZE
-SQ          = BOARD_SIZE // 8
-FPS         = 60
+# Tela
+BOARD_PX   = 600
+PANEL_W    = 220
+W, H       = BOARD_PX + PANEL_W, BOARD_PX
+SQ         = BOARD_PX // 8
+FPS        = 60
 
-# ── Paleta ──────────────────────────────────────────────────────
-C_LIGHT    = (240, 217, 181)
-C_DARK     = (181, 136,  99)
-C_BG       = ( 22,  21,  18)
-C_PANEL    = ( 30,  28,  24)
-C_ACCENT   = (241, 194,  50)
-C_SELECT   = (100, 200, 100, 160)
-C_MOVE     = (100, 200, 100, 100)
-C_CHECK    = (220,  50,  50, 180)
-C_TEXT     = (220, 210, 190)
-C_MUTED    = (140, 130, 110)
-C_WHITE_P  = (255, 248, 230)
-C_BLACK_P  = ( 40,  35,  30)
-C_BORDER   = ( 60,  55,  45)
+# Cores
+SQ_LIGHT   = (240, 217, 181)
+SQ_DARK    = (181, 136,  99)
+C_BG       = ( 18,  17,  14)
+C_PANEL    = ( 26,  24,  20)
+C_BORDER   = ( 55,  50,  40)
+C_ACCENT   = (200, 160,  60)
+C_TEXT     = (215, 205, 185)
+C_MUTED    = (120, 110,  90)
+C_SEL      = ( 80, 180,  80, 140)
+C_HINT     = ( 60, 150,  60,  90)
+C_CHECK    = (200,  40,  40, 170)
+C_LAST_FR  = (200, 200,  60, 100)
+C_LAST_TO  = (200, 200,  60, 140)
 
-# ── Fontes ──────────────────────────────────────────────────────
-F_BIG   = pygame.font.SysFont("Georgia", 26, bold=True)
-F_MED   = pygame.font.SysFont("Georgia", 18)
-F_SM    = pygame.font.SysFont("Georgia", 14)
-F_COORD = pygame.font.SysFont("Georgia", 13, italic=True)
-F_PIECE = pygame.font.SysFont("Segoe UI Symbol", SQ - 12)
+# Fontes
+PIECE_FONT  = pygame.font.SysFont("freeserif", SQ - 8)
+COORD_FONT  = pygame.font.SysFont("freeserif", 13)
+UI_BIG      = pygame.font.SysFont("freeserif", 22, bold=True)
+UI_MED      = pygame.font.SysFont("freeserif", 16)
+UI_SM       = pygame.font.SysFont("freeserif", 13)
 
-# Símbolos Unicode para peças
-SYMBOLS = {
+# Simbolos Unicode para as pecas
+SYM = {
     ('w','K'):'♔', ('w','Q'):'♕', ('w','R'):'♖',
     ('w','B'):'♗', ('w','N'):'♘', ('w','P'):'♙',
     ('b','K'):'♚', ('b','Q'):'♛', ('b','R'):'♜',
     ('b','B'):'♝', ('b','N'):'♞', ('b','P'):'♟',
 }
 
-# ── Lógica do Xadrez ────────────────────────────────────────────
+PIECE_VALS = {'P':100,'N':320,'B':330,'R':500,'Q':900,'K':20000}
+
+# Tabelas posicionais (perspectiva branca)
+PST = {
+'P': [[ 0, 0, 0, 0, 0, 0, 0, 0],
+      [50,50,50,50,50,50,50,50],
+      [10,10,20,30,30,20,10,10],
+      [ 5, 5,10,25,25,10, 5, 5],
+      [ 0, 0, 0,20,20, 0, 0, 0],
+      [ 5,-5,-10, 0, 0,-10,-5, 5],
+      [ 5,10,10,-20,-20,10,10, 5],
+      [ 0, 0, 0, 0, 0, 0, 0, 0]],
+'N': [[-50,-40,-30,-30,-30,-30,-40,-50],
+      [-40,-20,  0,  0,  0,  0,-20,-40],
+      [-30,  0, 10, 15, 15, 10,  0,-30],
+      [-30,  5, 15, 20, 20, 15,  5,-30],
+      [-30,  0, 15, 20, 20, 15,  0,-30],
+      [-30,  5, 10, 15, 15, 10,  5,-30],
+      [-40,-20,  0,  5,  5,  0,-20,-40],
+      [-50,-40,-30,-30,-30,-30,-40,-50]],
+'B': [[-20,-10,-10,-10,-10,-10,-10,-20],
+      [-10,  0,  0,  0,  0,  0,  0,-10],
+      [-10,  0,  5, 10, 10,  5,  0,-10],
+      [-10,  5,  5, 10, 10,  5,  5,-10],
+      [-10,  0, 10, 10, 10, 10,  0,-10],
+      [-10, 10, 10, 10, 10, 10, 10,-10],
+      [-10,  5,  0,  0,  0,  0,  5,-10],
+      [-20,-10,-10,-10,-10,-10,-10,-20]],
+'R': [[ 0, 0, 0, 0, 0, 0, 0, 0],
+      [ 5,10,10,10,10,10,10, 5],
+      [-5, 0, 0, 0, 0, 0, 0,-5],
+      [-5, 0, 0, 0, 0, 0, 0,-5],
+      [-5, 0, 0, 0, 0, 0, 0,-5],
+      [-5, 0, 0, 0, 0, 0, 0,-5],
+      [-5, 0, 0, 0, 0, 0, 0,-5],
+      [ 0, 0, 0, 5, 5, 0, 0, 0]],
+'Q': [[-20,-10,-10, -5, -5,-10,-10,-20],
+      [-10,  0,  0,  0,  0,  0,  0,-10],
+      [-10,  0,  5,  5,  5,  5,  0,-10],
+      [ -5,  0,  5,  5,  5,  5,  0, -5],
+      [  0,  0,  5,  5,  5,  5,  0, -5],
+      [-10,  5,  5,  5,  5,  5,  0,-10],
+      [-10,  0,  5,  0,  0,  0,  0,-10],
+      [-20,-10,-10, -5, -5,-10,-10,-20]],
+'K': [[-30,-40,-40,-50,-50,-40,-40,-30],
+      [-30,-40,-40,-50,-50,-40,-40,-30],
+      [-30,-40,-40,-50,-50,-40,-40,-30],
+      [-30,-40,-40,-50,-50,-40,-40,-30],
+      [-20,-30,-30,-40,-40,-30,-30,-20],
+      [-10,-20,-20,-20,-20,-20,-20,-10],
+      [ 20, 20,  0,  0,  0,  0, 20, 20],
+      [ 20, 30, 10,  0,  0, 10, 30, 20]],
+}
+
+# ============================================================
+#  LOGICA DO XADREZ
+# ============================================================
 
 def initial_board():
     b = [[None]*8 for _ in range(8)]
     order = ['R','N','B','Q','K','B','N','R']
-    for c,color in [(0,'b'),(7,'w')]:
-        for j,p in enumerate(order):
-            b[c][j] = (color, p)
-        prow = 1 if color=='b' else 6
-        for j in range(8):
-            b[prow][j] = (color,'P')
+    for row, color in [(0,'b'),(7,'w')]:
+        for c, p in enumerate(order):
+            b[row][c] = (color, p)
+        pr = 1 if color=='b' else 6
+        for c in range(8):
+            b[pr][c] = (color,'P')
     return b
 
-def in_bounds(r,c): return 0 <= r < 8 and 0 <= c < 8
+def ib(r,c):
+    return 0 <= r < 8 and 0 <= c < 8
 
-def piece_moves_raw(board, r, c, castling_rights, en_passant):
-    """Retorna movimentos sem verificação de xeque."""
+def raw_moves(board, r, c, cr, ep):
     piece = board[r][c]
     if not piece: return []
-    color, ptype = piece
+    color, pt = piece
     opp = 'b' if color=='w' else 'w'
-    moves = []
+    mv = []
 
     def slide(dirs):
         for dr,dc in dirs:
             nr,nc = r+dr, c+dc
-            while in_bounds(nr,nc):
+            while ib(nr,nc):
                 if board[nr][nc]:
-                    if board[nr][nc][0]==opp: moves.append((nr,nc))
+                    if board[nr][nc][0]==opp: mv.append((nr,nc))
                     break
-                moves.append((nr,nc))
+                mv.append((nr,nc))
                 nr+=dr; nc+=dc
 
-    if ptype == 'P':
+    if pt=='P':
         d = -1 if color=='w' else 1
-        start = 6 if color=='w' else 1
-        if in_bounds(r+d,c) and not board[r+d][c]:
-            moves.append((r+d,c))
-            if r==start and not board[r+2*d][c]:
-                moves.append((r+2*d,c))
-        for dc in [-1,1]:
+        sr = 6 if color=='w' else 1
+        if ib(r+d,c) and not board[r+d][c]:
+            mv.append((r+d,c))
+            if r==sr and not board[r+2*d][c]:
+                mv.append((r+2*d,c))
+        for dc in (-1,1):
             nr,nc = r+d, c+dc
-            if in_bounds(nr,nc):
-                if board[nr][nc] and board[nr][nc][0]==opp:
-                    moves.append((nr,nc))
-                if en_passant == (nr,nc):
-                    moves.append((nr,nc))
-
-    elif ptype == 'N':
+            if ib(nr,nc):
+                if (board[nr][nc] and board[nr][nc][0]==opp) or ep==(nr,nc):
+                    mv.append((nr,nc))
+    elif pt=='N':
         for dr,dc in [(-2,-1),(-2,1),(-1,-2),(-1,2),(1,-2),(1,2),(2,-1),(2,1)]:
             nr,nc = r+dr,c+dc
-            if in_bounds(nr,nc) and (not board[nr][nc] or board[nr][nc][0]==opp):
-                moves.append((nr,nc))
-
-    elif ptype == 'B': slide([(-1,-1),(-1,1),(1,-1),(1,1)])
-    elif ptype == 'R': slide([(-1,0),(1,0),(0,-1),(0,1)])
-    elif ptype == 'Q': slide([(-1,-1),(-1,1),(1,-1),(1,1),(-1,0),(1,0),(0,-1),(0,1)])
-
-    elif ptype == 'K':
+            if ib(nr,nc) and (not board[nr][nc] or board[nr][nc][0]==opp):
+                mv.append((nr,nc))
+    elif pt=='B': slide([(-1,-1),(-1,1),(1,-1),(1,1)])
+    elif pt=='R': slide([(-1,0),(1,0),(0,-1),(0,1)])
+    elif pt=='Q': slide([(-1,-1),(-1,1),(1,-1),(1,1),(-1,0),(1,0),(0,-1),(0,1)])
+    elif pt=='K':
         for dr,dc in [(-1,-1),(-1,0),(-1,1),(0,-1),(0,1),(1,-1),(1,0),(1,1)]:
             nr,nc = r+dr,c+dc
-            if in_bounds(nr,nc) and (not board[nr][nc] or board[nr][nc][0]==opp):
-                moves.append((nr,nc))
-        # Roque
+            if ib(nr,nc) and (not board[nr][nc] or board[nr][nc][0]==opp):
+                mv.append((nr,nc))
         row = 7 if color=='w' else 0
         if r==row and c==4:
-            if castling_rights[color]['K']:
-                if not board[row][5] and not board[row][6]:
-                    moves.append((row,6))
-            if castling_rights[color]['Q']:
-                if not board[row][3] and not board[row][2] and not board[row][1]:
-                    moves.append((row,2))
+            if cr[color]['K'] and not board[row][5] and not board[row][6]:
+                mv.append((row,6))
+            if cr[color]['Q'] and not board[row][3] and not board[row][2] and not board[row][1]:
+                mv.append((row,2))
+    return mv
 
-    return moves
-
-def king_pos(board, color):
+def king_sq(board, color):
     for r in range(8):
         for c in range(8):
             if board[r][c]==(color,'K'): return r,c
     return None
 
-def is_attacked(board, r, c, by_color):
-    """Verifica se (r,c) é atacado por by_color."""
-    # Usa movimentos brutos sem en-passant/roque para velocidade
-    fake_cr = {'w':{'K':False,'Q':False},'b':{'K':False,'Q':False}}
+def attacked(board, r, c, by):
+    fake = {'w':{'K':False,'Q':False},'b':{'K':False,'Q':False}}
     for rr in range(8):
         for cc in range(8):
-            if board[rr][cc] and board[rr][cc][0]==by_color:
-                if (r,c) in piece_moves_raw(board,rr,cc,fake_cr,None):
+            if board[rr][cc] and board[rr][cc][0]==by:
+                if (r,c) in raw_moves(board,rr,cc,fake,None):
                     return True
     return False
 
 def in_check(board, color):
-    kp = king_pos(board,color)
-    if not kp: return False
-    opp = 'b' if color=='w' else 'w'
-    return is_attacked(board, kp[0], kp[1], opp)
+    ks = king_sq(board, color)
+    return bool(ks and attacked(board, ks[0], ks[1], 'b' if color=='w' else 'w'))
 
-def legal_moves(board, r, c, castling_rights, en_passant):
+def legal_moves_sq(board, r, c, cr, ep):
     piece = board[r][c]
     if not piece: return []
     color = piece[0]
-    opp = 'b' if color=='w' else 'w'
-    raw = piece_moves_raw(board,r,c,castling_rights,en_passant)
+    opp   = 'b' if color=='w' else 'w'
     legal = []
-    for (nr,nc) in raw:
-        # Roque: verifica passagem
+    for (nr,nc) in raw_moves(board,r,c,cr,ep):
         if piece[1]=='K' and abs(nc-c)==2:
-            row = r
             step = 1 if nc>c else -1
-            mid = c+step
-            tmp = copy.deepcopy(board)
-            tmp[row][mid] = tmp[row][c]; tmp[row][c] = None
-            if is_attacked(tmp,row,c,opp) or is_attacked(tmp,row,mid,opp):
+            mid  = c+step
+            tmp  = copy.deepcopy(board)
+            tmp[r][mid]=tmp[r][c]; tmp[r][c]=None
+            if attacked(tmp,r,c,opp) or attacked(tmp,r,mid,opp):
                 continue
         nb = copy.deepcopy(board)
-        # En passant captura
-        if piece[1]=='P' and en_passant==(nr,nc):
-            cap_row = r
-            nb[cap_row][nc] = None
-        nb[nr][nc] = nb[r][c]; nb[r][c] = None
+        if piece[1]=='P' and ep==(nr,nc):
+            nb[r][nc]=None
+        nb[nr][nc]=nb[r][c]; nb[r][c]=None
         if not in_check(nb,color):
             legal.append((nr,nc))
     return legal
 
-def all_legal_moves(board, color, castling_rights, en_passant):
-    moves = []
+def all_legal(board, color, cr, ep):
+    moves=[]
     for r in range(8):
         for c in range(8):
             if board[r][c] and board[r][c][0]==color:
-                for m in legal_moves(board,r,c,castling_rights,en_passant):
+                for m in legal_moves_sq(board,r,c,cr,ep):
                     moves.append(((r,c),m))
     return moves
 
-def apply_move(board, castling_rights, en_passant, fr, fc, tr, tc):
-    nb = copy.deepcopy(board)
-    ncr = copy.deepcopy(castling_rights)
+def do_move(board, cr, ep, fr, fc, tr, tc, promo='Q'):
+    nb  = copy.deepcopy(board)
+    ncr = copy.deepcopy(cr)
     nep = None
     piece = nb[fr][fc]
-    color, ptype = piece
+    color, pt = piece
 
-    # En passant captura
-    if ptype=='P' and en_passant==(tr,tc):
-        nb[fr][tc] = None
+    if pt=='P' and ep==(tr,tc):
+        nb[fr][tc]=None
 
-    # Roque
-    if ptype=='K' and abs(tc-fc)==2:
-        row = fr
+    if pt=='K' and abs(tc-fc)==2:
+        row=fr
         if tc==6: nb[row][5]=nb[row][7]; nb[row][7]=None
         else:     nb[row][3]=nb[row][0]; nb[row][0]=None
 
-    nb[tr][tc] = nb[fr][fc]; nb[fr][fc] = None
+    nb[tr][tc]=nb[fr][fc]; nb[fr][fc]=None
 
-    # Atualiza direitos de roque
-    if ptype=='K': ncr[color]['K']=False; ncr[color]['Q']=False
-    if ptype=='R':
-        row = 7 if color=='w' else 0
+    if pt=='K': ncr[color]['K']=False; ncr[color]['Q']=False
+    if pt=='R':
+        row=7 if color=='w' else 0
         if fr==row and fc==7: ncr[color]['K']=False
         if fr==row and fc==0: ncr[color]['Q']=False
-    if (tr,tc)==(7,7): ncr['w']['K']=False
-    if (tr,tc)==(7,0): ncr['w']['Q']=False
-    if (tr,tc)==(0,7): ncr['b']['K']=False
-    if (tr,tc)==(0,0): ncr['b']['Q']=False
 
-    # En passant flag
-    if ptype=='P' and abs(tr-fr)==2:
-        nep = ((fr+tr)//2, tc)
+    for (rr,cc,clr,side) in [(7,7,'w','K'),(7,0,'w','Q'),(0,7,'b','K'),(0,0,'b','Q')]:
+        if (tr,tc)==(rr,cc): ncr[clr][side]=False
 
-    # Promoção auto-queen
-    if ptype=='P' and (tr==0 or tr==7):
-        nb[tr][tc] = (color,'Q')
+    if pt=='P' and abs(tr-fr)==2:
+        nep=((fr+tr)//2,tc)
+
+    if pt=='P' and (tr==0 or tr==7):
+        nb[tr][tc]=(color,promo)
 
     return nb, ncr, nep
 
-# ── Renderização ────────────────────────────────────────────────
+# ============================================================
+#  AVALIACAO + MINIMAX
+# ============================================================
 
-def draw_board(surf, selected, highlights, check_king, flipped):
+def evaluate(board, color):
+    score = 0
     for r in range(8):
         for c in range(8):
-            dr = 7-r if flipped else r
-            dc = 7-c if flipped else c
-            color = C_LIGHT if (r+c)%2==0 else C_DARK
+            p = board[r][c]
+            if not p: continue
+            pc, pt = p
+            val = PIECE_VALS[pt]
+            pr = r if pc=='w' else 7-r
+            pos = PST[pt][pr][c]
+            total = val + pos
+            score += total if pc==color else -total
+    return score
+
+def order_moves(board, moves):
+    def score(m):
+        (fr,fc),(tr,tc) = m
+        cap = board[tr][tc]
+        if cap:
+            return -(PIECE_VALS[cap[1]] - PIECE_VALS[board[fr][fc][1]])
+        return 0
+    return sorted(moves, key=score)
+
+def minimax(board, cr, ep, depth, alpha, beta, maximizing, ai_color, stop_event):
+    if stop_event.is_set():
+        return evaluate(board, ai_color), None
+
+    color = ai_color if maximizing else ('b' if ai_color=='w' else 'w')
+    moves = all_legal(board, color, cr, ep)
+
+    if not moves:
+        if in_check(board, color):
+            return (-99999 if maximizing else 99999), None
+        return 0, None
+
+    if depth == 0:
+        return evaluate(board, ai_color), None
+
+    moves = order_moves(board, moves)
+    best_move = None
+
+    if maximizing:
+        best = -float('inf')
+        for (fr,fc),(tr,tc) in moves:
+            nb,ncr,nep = do_move(board,cr,ep,fr,fc,tr,tc)
+            val,_ = minimax(nb,ncr,nep,depth-1,alpha,beta,False,ai_color,stop_event)
+            if val > best:
+                best = val; best_move = ((fr,fc),(tr,tc))
+            alpha = max(alpha, best)
+            if beta <= alpha: break
+        return best, best_move
+    else:
+        best = float('inf')
+        for (fr,fc),(tr,tc) in moves:
+            nb,ncr,nep = do_move(board,cr,ep,fr,fc,tr,tc)
+            val,_ = minimax(nb,ncr,nep,depth-1,alpha,beta,True,ai_color,stop_event)
+            if val < best:
+                best = val; best_move = ((fr,fc),(tr,tc))
+            beta = min(beta, best)
+            if beta <= alpha: break
+        return best, best_move
+
+AI_DEPTH = 3
+
+def ai_think(board, cr, ep, ai_color, result_container, stop_event):
+    _, move = minimax(board, cr, ep, AI_DEPTH, -float('inf'), float('inf'),
+                      True, ai_color, stop_event)
+    if not stop_event.is_set():
+        result_container['move'] = move
+        result_container['done'] = True
+
+# ============================================================
+#  RENDERIZACAO
+# ============================================================
+
+def blend(surf, rgba, rect):
+    s = pygame.Surface((rect.width, rect.height), pygame.SRCALPHA)
+    s.fill(rgba)
+    surf.blit(s, rect)
+
+def draw_board(surf, sel, hints, check_king, last_move):
+    for r in range(8):
+        for c in range(8):
+            base = SQ_LIGHT if (r+c)%2==0 else SQ_DARK
             rect = pygame.Rect(c*SQ, r*SQ, SQ, SQ)
-            pygame.draw.rect(surf, color, rect)
+            pygame.draw.rect(surf, base, rect)
 
-            # Destaque xeque
-            if (dr,dc)==check_king:
-                s = pygame.Surface((SQ,SQ), pygame.SRCALPHA)
-                s.fill(C_CHECK)
-                surf.blit(s,rect)
+            if last_move:
+                (lfr,lfc),(ltr,ltc) = last_move
+                if (r,c)==(lfr,lfc): blend(surf, C_LAST_FR, rect)
+                if (r,c)==(ltr,ltc): blend(surf, C_LAST_TO, rect)
 
-            # Seleção
-            if (dr,dc)==selected:
-                s = pygame.Surface((SQ,SQ), pygame.SRCALPHA)
-                s.fill(C_SELECT)
-                surf.blit(s,rect)
+            if check_king and (r,c)==check_king:
+                blend(surf, C_CHECK, rect)
+            if sel and (r,c)==sel:
+                blend(surf, C_SEL, rect)
+            if (r,c) in hints:
+                blend(surf, C_HINT, rect)
+                pygame.draw.circle(surf, (50,140,50),
+                    (c*SQ+SQ//2, r*SQ+SQ//2), SQ//7)
 
-            # Movimentos possíveis
-            if (dr,dc) in highlights:
-                s = pygame.Surface((SQ,SQ), pygame.SRCALPHA)
-                s.fill(C_MOVE)
-                surf.blit(s,rect)
-                # Ponto central
-                pygame.draw.circle(surf, (80,160,80,200),
-                    (c*SQ+SQ//2, r*SQ+SQ//2), SQ//8)
-
-    # Coordenadas
-    files = "abcdefgh"
-    ranks = "87654321"
-    if flipped: files=files[::-1]; ranks=ranks[::-1]
+    files="abcdefgh"; ranks="87654321"
     for i in range(8):
-        tc = C_DARK if i%2==0 else C_LIGHT
-        # Letras (bottom)
-        t = F_COORD.render(files[i], True, tc)
-        surf.blit(t, (i*SQ+SQ-12, BOARD_SIZE-15))
-        # Números (left)
-        t = F_COORD.render(ranks[i], True, C_DARK if i%2==1 else C_LIGHT)
-        surf.blit(t, (4, i*SQ+4))
+        tc = SQ_DARK if i%2==0 else SQ_LIGHT
+        t = COORD_FONT.render(files[i], True, tc)
+        surf.blit(t, (i*SQ + SQ-t.get_width()-3, BOARD_PX-t.get_height()-2))
+        t = COORD_FONT.render(ranks[i], True, SQ_DARK if i%2==1 else SQ_LIGHT)
+        surf.blit(t, (3, i*SQ+3))
 
-def draw_pieces(surf, board, flipped, dragging=None, drag_pos=None):
+def draw_piece_at(surf, piece, x, y, sz):
+    sym = SYM.get(piece, '?')
+    shadow = PIECE_FONT.render(sym, True, (15, 12, 8))
+    surf.blit(shadow, (x+(sz-shadow.get_width())//2+2, y+(sz-shadow.get_height())//2+2))
+    col = (255, 250, 235) if piece[0]=='w' else (30, 25, 20)
+    t = PIECE_FONT.render(sym, True, col)
+    surf.blit(t, (x+(sz-t.get_width())//2, y+(sz-t.get_height())//2))
+
+def draw_pieces(surf, board, dragging, drag_pos):
     for r in range(8):
         for c in range(8):
-            dr = 7-r if flipped else r
-            dc = 7-c if flipped else c
-            piece = board[dr][dc]
-            if not piece: continue
-            if dragging and dragging==(dr,dc): continue
-            sym = SYMBOLS.get(piece, '?')
-            t = F_PIECE.render(sym, True, C_WHITE_P if piece[0]=='w' else C_BLACK_P)
-            # Sombra
-            ts = F_PIECE.render(sym, True, (0,0,0,120))
-            surf.blit(ts, (c*SQ+(SQ-t.get_width())//2+2, r*SQ+(SQ-t.get_height())//2+2))
-            surf.blit(t,  (c*SQ+(SQ-t.get_width())//2,   r*SQ+(SQ-t.get_height())//2))
-
-    # Peça sendo arrastada
+            p = board[r][c]
+            if not p or (dragging and dragging==(r,c)): continue
+            draw_piece_at(surf, p, c*SQ, r*SQ, SQ)
     if dragging and drag_pos:
-        piece = board[dragging[0]][dragging[1]]
-        if piece:
-            sym = SYMBOLS.get(piece,'?')
-            t = F_PIECE.render(sym, True, C_WHITE_P if piece[0]=='w' else C_BLACK_P)
-            surf.blit(t, (drag_pos[0]-t.get_width()//2, drag_pos[1]-t.get_height()//2))
+        p = board[dragging[0]][dragging[1]]
+        if p:
+            draw_piece_at(surf, p, drag_pos[0]-SQ//2, drag_pos[1]-SQ//2, SQ)
 
-def draw_panel(surf, turn, move_history, status, captured_w, captured_b, flipped):
-    x = BOARD_SIZE
-    pygame.draw.rect(surf, C_PANEL, (x,0,PANEL_WIDTH,HEIGHT))
-    pygame.draw.line(surf, C_BORDER, (x,0),(x,HEIGHT), 2)
+BTNS = {}
 
-    y = 18
-    # Título
-    title = F_BIG.render("♟  XADREZ", True, C_ACCENT)
-    surf.blit(title, (x+(PANEL_WIDTH-title.get_width())//2, y))
-    y += 38
-    pygame.draw.line(surf, C_BORDER, (x+10,y),(x+PANEL_WIDTH-10,y),1)
-    y += 14
+def draw_panel(surf, G):
+    global AI_DEPTH
+    x = BOARD_PX
+    pygame.draw.rect(surf, C_PANEL, (x,0,PANEL_W,H))
+    pygame.draw.line(surf, C_BORDER, (x,0),(x,H), 2)
 
-    # Vez de jogar
-    turn_str = "● Brancas" if turn=='w' else "● Pretas"
-    tc = (240,240,220) if turn=='w' else (120,110,90)
-    bg = (60,55,45) if turn!='w' else (80,75,60)
-    trect = pygame.Rect(x+10, y, PANEL_WIDTH-20, 32)
-    pygame.draw.rect(surf, bg, trect, border_radius=6)
-    tt = F_MED.render(turn_str, True, tc)
-    surf.blit(tt, (x+10+(PANEL_WIDTH-20-tt.get_width())//2, y+7))
-    y += 44
+    y = 16
+    title = UI_BIG.render("XADREZ  ♟", True, C_ACCENT)
+    surf.blit(title, (x+(PANEL_W-title.get_width())//2, y)); y+=38
+    pygame.draw.line(surf, C_BORDER, (x+10,y),(x+PANEL_W-10,y), 1); y+=14
 
-    # Status
-    if status:
-        st = F_MED.render(status, True, C_ACCENT)
-        surf.blit(st, (x+(PANEL_WIDTH-st.get_width())//2, y))
-        y += 28
+    if G['game_over']:
+        msg = G['status']; tc = C_ACCENT
+    elif G['thinking']:
+        msg = "IA pensando..."; tc = (100,160,220)
+    else:
+        who = "Brancas" if G['turn']=='w' else "Pretas"
+        msg = f"Vez: {who}"; tc = C_TEXT
+    t = UI_MED.render(msg, True, tc)
+    surf.blit(t, (x+(PANEL_W-t.get_width())//2, y)); y+=26
 
-    # Peças capturadas
-    def draw_captured(pieces, label, yy):
-        lt = F_SM.render(label, True, C_MUTED)
-        surf.blit(lt, (x+12, yy)); yy+=18
-        row=""; xs=x+12
-        for p in pieces:
-            s = SYMBOLS.get(p,'')
-            row+=s
+    ai_lbl = "Voce: " + ("Brancas" if G['ai_color']=='b' else "Pretas")
+    t = UI_SM.render(ai_lbl, True, C_MUTED)
+    surf.blit(t,(x+(PANEL_W-t.get_width())//2,y)); y+=18
+
+    diff_lbl = f"Dificuldade: {'I'*AI_DEPTH}  ({AI_DEPTH})"
+    t = UI_SM.render(diff_lbl, True, C_MUTED)
+    surf.blit(t,(x+(PANEL_W-t.get_width())//2,y)); y+=20
+
+    if G['status']=="Xeque!" and not G['game_over']:
+        t = UI_SM.render("! XEQUE !", True, (220,80,80))
+        surf.blit(t,(x+(PANEL_W-t.get_width())//2,y)); y+=18
+
+    pygame.draw.line(surf, C_BORDER,(x+10,y),(x+PANEL_W-10,y),1); y+=10
+
+    def draw_caps(pieces, label):
+        nonlocal y
+        t=UI_SM.render(label, True, C_MUTED)
+        surf.blit(t,(x+12,y)); y+=16
+        row="".join(SYM.get(p,'') for p in pieces)
         if row:
-            t = F_SM.render(row, True, C_TEXT)
-            surf.blit(t,(xs,yy))
-        return yy+20
+            t=UI_SM.render(row, True, C_TEXT)
+            surf.blit(t,(x+12,y))
+        y+=18
 
-    y = draw_captured(captured_b, "Capturadas (Brancas):", y)
-    y = draw_captured(captured_w, "Capturadas (Pretas):", y)
-    y += 4
-    pygame.draw.line(surf, C_BORDER, (x+10,y),(x+PANEL_WIDTH-10,y),1)
-    y += 10
+    draw_caps(G['caps_b'], "Brancas capturaram:")
+    draw_caps(G['caps_w'], "Pretas capturaram:")
+    pygame.draw.line(surf, C_BORDER,(x+10,y),(x+PANEL_W-10,y),1); y+=8
 
-    # Histórico de movimentos
-    ht = F_SM.render("Histórico de Movimentos", True, C_MUTED)
-    surf.blit(ht,(x+(PANEL_WIDTH-ht.get_width())//2, y)); y+=20
+    ht = UI_SM.render("Historico", True, C_MUTED)
+    surf.blit(ht,(x+(PANEL_W-ht.get_width())//2,y)); y+=16
+    shown = G['history'][-18:]
+    for i in range(0,len(shown),2):
+        num=(len(G['history'])-len(shown)+i)//2+1
+        m1=shown[i]; m2=shown[i+1] if i+1<len(shown) else ""
+        lt=UI_SM.render(f"{num:2d}. {m1:<8}{m2}", True, C_TEXT)
+        surf.blit(lt,(x+10,y)); y+=15
+        if y>H-80: break
 
-    cols = ['a','b','c','d','e','f','g','h']
-    shown = move_history[-18:]
-    for i in range(0, len(shown), 2):
-        num = (len(move_history)-len(shown)+i)//2+1
-        m1 = shown[i]
-        m2 = shown[i+1] if i+1<len(shown) else ""
-        line = f"{num:2d}. {m1:<8}{m2}"
-        lt = F_SM.render(line, True, C_TEXT)
-        surf.blit(lt,(x+12,y)); y+=17
-        if y>HEIGHT-80: break
+    by = H-68
+    _btn(surf, x+8,  by,   PANEL_W//2-12, 26, "Reiniciar", "restart")
+    _btn(surf, x+PANEL_W//2+4, by, PANEL_W//2-12, 26, "Trocar Lado", "swap")
+    by+=32
+    _btn(surf, x+8, by, PANEL_W//2-12, 24, "< Facil", "easier")
+    _btn(surf, x+PANEL_W//2+4, by, PANEL_W//2-12, 24, "Dificil >", "harder")
 
-    # Botões
-    btn_y = HEIGHT - 60
-    draw_button(surf, x+10, btn_y, PANEL_WIDTH//2-14, 28, "Reiniciar", C_BORDER, C_TEXT, "restart")
-    draw_button(surf, x+PANEL_WIDTH//2+4, btn_y, PANEL_WIDTH//2-14, 28,
-                "Girar" if not flipped else "Girar ↩", C_BORDER, C_TEXT, "flip")
-
-BUTTONS = {}
-def draw_button(surf, x,y,w,h,text,bg,fg,tag):
+def _btn(surf, x, y, w, h, text, tag):
     rect = pygame.Rect(x,y,w,h)
-    BUTTONS[tag] = rect
-    pygame.draw.rect(surf, bg, rect, border_radius=5)
-    pygame.draw.rect(surf, C_MUTED, rect, 1, border_radius=5)
-    t = F_SM.render(text, True, fg)
+    BTNS[tag] = rect
+    mx,my = pygame.mouse.get_pos()
+    hover = rect.collidepoint(mx,my)
+    bg = (70,65,55) if hover else (42,40,34)
+    pygame.draw.rect(surf, bg, rect, border_radius=4)
+    pygame.draw.rect(surf, C_MUTED, rect, 1, border_radius=4)
+    t = UI_SM.render(text, True, C_TEXT)
     surf.blit(t,(x+(w-t.get_width())//2, y+(h-t.get_height())//2))
 
-def pos_to_coords(r, c, flipped):
-    cols = "abcdefgh"
-    dr = r if not flipped else 7-r
-    dc = c if not flipped else 7-c
-    return f"{cols[dc]}{8-dr}"
-
-def move_to_str(fr,fc,tr,tc,piece,captured,flipped):
-    src = pos_to_coords(fr,fc,flipped)
-    dst = pos_to_coords(tr,tc,flipped)
-    cap = "x" if captured else "-"
-    sym = SYMBOLS.get(piece,'')
-    return f"{sym}{src}{cap}{dst}"
-
-# ── Tela de promoção ────────────────────────────────────────────
-
-def promotion_screen(surf, color):
-    overlay = pygame.Surface((WIDTH,HEIGHT), pygame.SRCALPHA)
-    overlay.fill((0,0,0,160))
+def promotion_pick(surf, color):
+    overlay = pygame.Surface((W,H), pygame.SRCALPHA)
+    overlay.fill((0,0,0,170))
     surf.blit(overlay,(0,0))
-    bw,bh = 110,110
-    opts = ['Q','R','B','N']
-    total = len(opts)*(bw+20)-20
-    sx = (WIDTH-total)//2
-    sy = HEIGHT//2-bh//2
-    rects = {}
+    opts=['Q','R','B','N']; bw=bh=100
+    total=len(opts)*(bw+16)-16
+    sx=(BOARD_PX-total)//2; sy=H//2-bh//2
+    rects={}
     for i,p in enumerate(opts):
-        rx = sx+i*(bw+20)
-        rect = pygame.Rect(rx,sy,bw,bh)
-        pygame.draw.rect(surf,(50,48,42),rect,border_radius=10)
+        rx=sx+i*(bw+16)
+        rect=pygame.Rect(rx,sy,bw,bh)
+        pygame.draw.rect(surf,(50,46,38),rect,border_radius=10)
         pygame.draw.rect(surf,C_ACCENT,rect,2,border_radius=10)
-        sym = SYMBOLS.get((color,p),'')
-        t = F_PIECE.render(sym,True, C_WHITE_P if color=='w' else C_BLACK_P)
-        surf.blit(t,(rx+(bw-t.get_width())//2,sy+(bh-t.get_height())//2))
+        draw_piece_at(surf,(color,p),rx,sy,bw)
         rects[p]=rect
+    lbl=UI_MED.render("Escolha a promocao:", True, C_TEXT)
+    surf.blit(lbl,((BOARD_PX-lbl.get_width())//2, sy-34))
     pygame.display.flip()
+    clk = pygame.time.Clock()
     while True:
         for ev in pygame.event.get():
             if ev.type==pygame.QUIT: pygame.quit(); sys.exit()
             if ev.type==pygame.MOUSEBUTTONDOWN:
-                mx,my=ev.pos
                 for p,rect in rects.items():
-                    if rect.collidepoint(mx,my): return p
-        pygame.time.Clock().tick(FPS)
+                    if rect.collidepoint(ev.pos): return p
+        clk.tick(FPS)
 
-# ── Loop Principal ───────────────────────────────────────────────
+# ============================================================
+#  ESTADO DO JOGO
+# ============================================================
+
+def move_notation(fr,fc,tr,tc,piece,cap):
+    files="abcdefgh"
+    sym=SYM.get(piece,'')
+    sep="x" if cap else "-"
+    return f"{sym}{files[fc]}{8-fr}{sep}{files[tc]}{8-tr}"
+
+def new_game(ai_color='b'):
+    return {
+        'board':    initial_board(),
+        'turn':     'w',
+        'cr':       {'w':{'K':True,'Q':True},'b':{'K':True,'Q':True}},
+        'ep':       None,
+        'sel':      None,
+        'hints':    set(),
+        'history':  [],
+        'caps_w':   [],
+        'caps_b':   [],
+        'status':   '',
+        'game_over':False,
+        'last_move':None,
+        'ai_color': ai_color,
+        'thinking': False,
+        'drag':     None,
+        'drag_pos': None,
+        'ai_result':{'move':None,'done':False},
+        'ai_thread':None,
+        'stop_ev':  threading.Event(),
+    }
+
+def check_game_state(G):
+    opp=G['turn']
+    lm=all_legal(G['board'],opp,G['cr'],G['ep'])
+    if not lm:
+        if in_check(G['board'],opp):
+            winner="Brancas" if opp=='b' else "Pretas"
+            G['status']=f"Xeque-mate! {winner} vencem!"
+        else:
+            G['status']="Empate (afogamento)!"
+        G['game_over']=True
+    elif in_check(G['board'],opp):
+        G['status']="Xeque!"
+    else:
+        G['status']=''
+
+def apply_move(G, fr, fc, tr, tc, screen=None):
+    board=G['board']; cr=G['cr']; ep=G['ep']
+    piece=board[fr][fc]; cap=board[tr][tc]; old_ep=ep
+
+    G['board'],G['cr'],G['ep'] = do_move(board,cr,ep,fr,fc,tr,tc)
+
+    if piece[1]=='P' and old_ep==(tr,tc) and not cap:
+        cap_p = board[fr][tc]
+        if cap_p:
+            (G['caps_b'] if cap_p[0]=='b' else G['caps_w']).append(cap_p)
+    elif cap:
+        (G['caps_b'] if cap[0]=='b' else G['caps_w']).append(cap)
+
+    if screen and piece[1]=='P' and (tr==0 or tr==7):
+        choice = promotion_pick(screen, piece[0])
+        G['board'][tr][tc]=(piece[0],choice)
+
+    G['history'].append(move_notation(fr,fc,tr,tc,piece,cap))
+    G['last_move']=((fr,fc),(tr,tc))
+    G['turn']='b' if G['turn']=='w' else 'w'
+    check_game_state(G)
+
+def start_ai(G):
+    G['thinking']=True
+    G['ai_result']={'move':None,'done':False}
+    G['stop_ev']=threading.Event()
+    t=threading.Thread(target=ai_think,
+        args=(G['board'],G['cr'],G['ep'],G['ai_color'],
+              G['ai_result'],G['stop_ev']),daemon=True)
+    G['ai_thread']=t
+    t.start()
+
+def stop_ai(G):
+    if G.get('ai_thread') and G['ai_thread'].is_alive():
+        G['stop_ev'].set()
+        G['ai_thread'].join(timeout=0.5)
+    G['thinking']=False
+
+# ============================================================
+#  MAIN
+# ============================================================
 
 def main():
-    screen = pygame.display.set_mode((WIDTH,HEIGHT))
-    pygame.display.set_caption("Xadrez")
+    global AI_DEPTH
+    screen = pygame.display.set_mode((W, H))
+    pygame.display.set_caption("Xadrez com IA")
     clock = pygame.time.Clock()
 
-    def new_game():
-        return {
-            'board': initial_board(),
-            'turn': 'w',
-            'castling': {'w':{'K':True,'Q':True},'b':{'K':True,'Q':True}},
-            'en_passant': None,
-            'selected': None,
-            'highlights': set(),
-            'move_history': [],
-            'captured_w': [],   # capturadas pelo branco (peças pretas)
-            'captured_b': [],   # capturadas pelo preto (peças brancas)
-            'status': '',
-            'flipped': False,
-            'dragging': None,
-            'drag_pos': None,
-            'game_over': False,
-        }
+    G = new_game(ai_color='b')
 
-    G = new_game()
-
-    def sq_from_mouse(mx,my,flipped):
-        if mx>=BOARD_SIZE: return None,None
-        c = mx//SQ; r = my//SQ
-        if flipped: r=7-r; c=7-c
-        return r,c
-
-    running = True
-    while running:
+    while True:
         clock.tick(FPS)
         mx,my = pygame.mouse.get_pos()
 
+        # Resultado da IA pronto?
+        if G['thinking'] and G['ai_result'].get('done'):
+            G['thinking']=False
+            move=G['ai_result']['move']
+            if move and not G['game_over']:
+                (fr,fc),(tr,tc)=move
+                apply_move(G, fr, fc, tr, tc, None)
+
+        # Vez da IA?
+        if not G['game_over'] and not G['thinking'] and G['turn']==G['ai_color']:
+            start_ai(G)
+
         for ev in pygame.event.get():
             if ev.type==pygame.QUIT:
-                running=False; break
+                stop_ai(G); pygame.quit(); sys.exit()
 
             if ev.type==pygame.KEYDOWN:
-                if ev.key==pygame.K_r: G=new_game()
-                if ev.key==pygame.K_f: G['flipped']=not G['flipped']
+                if ev.key==pygame.K_r:
+                    stop_ai(G); G=new_game(G['ai_color'])
 
             if ev.type==pygame.MOUSEBUTTONDOWN and ev.button==1:
-                # Botões
-                for tag,rect in BUTTONS.items():
+                for tag,rect in BTNS.items():
                     if rect.collidepoint(mx,my):
-                        if tag=='restart': G=new_game()
-                        if tag=='flip': G['flipped']=not G['flipped']
+                        if tag=='restart':
+                            stop_ai(G); G=new_game(G['ai_color'])
+                        elif tag=='swap':
+                            ai_c='w' if G['ai_color']=='b' else 'b'
+                            stop_ai(G); G=new_game(ai_c)
+                        elif tag=='harder' and AI_DEPTH<5:
+                            AI_DEPTH+=1; stop_ai(G); G=new_game(G['ai_color'])
+                        elif tag=='easier' and AI_DEPTH>1:
+                            AI_DEPTH-=1; stop_ai(G); G=new_game(G['ai_color'])
 
-                if not G['game_over']:
-                    r,c = sq_from_mouse(mx,my,G['flipped'])
-                    if r is not None:
-                        piece = G['board'][r][c]
-                        if piece and piece[0]==G['turn']:
-                            G['selected']=(r,c)
-                            G['highlights']=set(legal_moves(G['board'],r,c,G['castling'],G['en_passant']))
-                            G['dragging']=(r,c)
-                            G['drag_pos']=(mx,my)
-                        elif G['selected']:
-                            fr,fc=G['selected']
-                            if (r,c) in G['highlights']:
-                                # Executa movimento
-                                moving = G['board'][fr][fc]
-                                captured = G['board'][r][c]
-                                ep = G['en_passant']
-                                G['board'],G['castling'],G['en_passant'] = apply_move(
-                                    G['board'],G['castling'],G['en_passant'],fr,fc,r,c)
-                                # Promoção manual
-                                if moving[1]=='P' and (r==0 or r==7):
-                                    screen.blit(screen,(0,0))
-                                    choice = promotion_screen(screen, moving[0])
-                                    G['board'][r][c]=(moving[0],choice)
-                                if captured:
-                                    if captured[0]=='b': G['captured_b'].append(captured)
-                                    else: G['captured_w'].append(captured)
-                                # En passant captura
-                                if moving[1]=='P' and ep==(r,c) and not captured:
-                                    cap = G['board'][fr][c]
-                                    if cap:
-                                        if cap[0]=='b': G['captured_b'].append(cap)
-                                        else: G['captured_w'].append(cap)
-                                G['move_history'].append(move_to_str(fr,fc,r,c,moving,captured,G['flipped']))
-                                G['turn']='b' if G['turn']=='w' else 'w'
-                                # Verifica estado
-                                opp=G['turn']
-                                lm=all_legal_moves(G['board'],opp,G['castling'],G['en_passant'])
-                                if not lm:
-                                    if in_check(G['board'],opp):
-                                        w='Brancas' if opp=='b' else 'Pretas'
-                                        G['status']=f"Xeque-mate! {w} vencem!"
-                                    else:
-                                        G['status']="Empate (afogamento)!"
-                                    G['game_over']=True
-                                elif in_check(G['board'],opp):
-                                    G['status']="Xeque!"
-                                else:
-                                    G['status']=''
-                            G['selected']=None
-                            G['highlights']=set()
-                            G['dragging']=None
+                if mx < BOARD_PX and not G['game_over'] and not G['thinking']:
+                    player = 'w' if G['ai_color']=='b' else 'b'
+                    if G['turn']==player:
+                        r,c=my//SQ, mx//SQ
+                        if ib(r,c):
+                            piece=G['board'][r][c]
+                            if piece and piece[0]==player:
+                                G['sel']=(r,c)
+                                G['hints']=set(legal_moves_sq(G['board'],r,c,G['cr'],G['ep']))
+                                G['drag']=(r,c); G['drag_pos']=(mx,my)
+                            elif G['sel']:
+                                if (r,c) in G['hints']:
+                                    apply_move(G,G['sel'][0],G['sel'][1],r,c,screen)
+                                G['sel']=None; G['hints']=set(); G['drag']=None
 
-            if ev.type==pygame.MOUSEMOTION:
-                if G['dragging']:
-                    G['drag_pos']=(mx,my)
+            if ev.type==pygame.MOUSEMOTION and G['drag']:
+                G['drag_pos']=(mx,my)
 
             if ev.type==pygame.MOUSEBUTTONUP and ev.button==1:
-                if G['dragging'] and not G['game_over']:
-                    r,c = sq_from_mouse(mx,my,G['flipped'])
-                    fr,fc = G['dragging']
-                    if r is not None and (r,c)!=( fr,fc) and (r,c) in G['highlights']:
-                        moving = G['board'][fr][fc]
-                        captured = G['board'][r][c]
-                        ep = G['en_passant']
-                        G['board'],G['castling'],G['en_passant'] = apply_move(
-                            G['board'],G['castling'],G['en_passant'],fr,fc,r,c)
-                        if moving[1]=='P' and (r==0 or r==7):
-                            choice = promotion_screen(screen, moving[0])
-                            G['board'][r][c]=(moving[0],choice)
-                        if captured:
-                            if captured[0]=='b': G['captured_b'].append(captured)
-                            else: G['captured_w'].append(captured)
-                        if moving[1]=='P' and ep==(r,c) and not captured:
-                            cap = G['board'][fr][c]
-                            if cap:
-                                if cap[0]=='b': G['captured_b'].append(cap)
-                                else: G['captured_w'].append(cap)
-                        G['move_history'].append(move_to_str(fr,fc,r,c,moving,captured,G['flipped']))
-                        G['turn']='b' if G['turn']=='w' else 'w'
-                        opp=G['turn']
-                        lm=all_legal_moves(G['board'],opp,G['castling'],G['en_passant'])
-                        if not lm:
-                            if in_check(G['board'],opp):
-                                w='Brancas' if opp=='b' else 'Pretas'
-                                G['status']=f"Xeque-mate! {w} vencem!"
-                            else:
-                                G['status']="Empate (afogamento)!"
-                            G['game_over']=True
-                        elif in_check(G['board'],opp):
-                            G['status']="Xeque!"
-                        else:
-                            G['status']=''
-                    G['dragging']=None
-                    G['drag_pos']=None
-                    G['selected']=None
-                    G['highlights']=set()
+                if G['drag'] and not G['game_over'] and not G['thinking']:
+                    r,c=my//SQ,mx//SQ
+                    fr,fc=G['drag']
+                    if ib(r,c) and (r,c)!=(fr,fc) and (r,c) in G['hints']:
+                        apply_move(G,fr,fc,r,c,screen)
+                    G['drag']=None; G['sel']=None; G['hints']=set()
 
-        # ── Renderização ──
+        # Render
         screen.fill(C_BG)
-        board_surf = pygame.Surface((BOARD_SIZE,BOARD_SIZE))
+        bsurf = pygame.Surface((BOARD_PX,BOARD_PX))
 
-        check_king = None
+        ck = None
         if in_check(G['board'],G['turn']):
-            check_king = king_pos(G['board'],G['turn'])
+            ck = king_sq(G['board'],G['turn'])
 
-        draw_board(board_surf, G['selected'], G['highlights'], check_king, G['flipped'])
-        draw_pieces(board_surf, G['board'], G['flipped'], G['dragging'], G['drag_pos'])
-        screen.blit(board_surf,(0,0))
-        draw_panel(screen, G['turn'], G['move_history'], G['status'],
-                   G['captured_w'], G['captured_b'], G['flipped'])
+        draw_board(bsurf, G['sel'], G['hints'], ck, G['last_move'])
+        draw_pieces(bsurf, G['board'], G['drag'], G['drag_pos'])
 
+        if G['thinking']:
+            s=pygame.Surface((BOARD_PX,BOARD_PX),pygame.SRCALPHA)
+            s.fill((0,0,0,25))
+            bsurf.blit(s,(0,0))
+            txt=UI_MED.render("IA calculando...", True, (120,170,230))
+            bsurf.blit(txt,((BOARD_PX-txt.get_width())//2, BOARD_PX//2-12))
+
+        screen.blit(bsurf,(0,0))
+        draw_panel(screen, G)
         pygame.display.flip()
-
-    pygame.quit()
-    sys.exit()
 
 if __name__=='__main__':
     main()
